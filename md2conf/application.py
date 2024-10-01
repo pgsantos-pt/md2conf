@@ -3,7 +3,7 @@ import os.path
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .api import ConfluenceSession
+from .api import ConfluencePage, ConfluenceSession
 from .converter import (
     ConfluenceDocument,
     ConfluenceDocumentOptions,
@@ -13,6 +13,7 @@ from .converter import (
     extract_qualified_id,
     read_qualified_id,
 )
+from .matcher import Matcher, MatcherOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -89,16 +90,18 @@ class Application:
 
         LOGGER.info(f"Indexing directory: {local_dir}")
 
+        matcher = Matcher(MatcherOptions(source=".mdignore", extension="md"), local_dir)
+
         files: List[Path] = []
         directories: List[Path] = []
         for entry in os.scandir(local_dir):
+            if matcher.is_excluded(entry.name):
+                continue
+
             if entry.is_file():
-                if entry.name.endswith(".md"):
-                    # skip non-markdown files
-                    files.append((Path(local_dir) / entry.name).absolute())
+                files.append((Path(local_dir) / entry.name).absolute())
             elif entry.is_dir():
-                if not entry.name.startswith("."):
-                    directories.append((Path(local_dir) / entry.name).absolute())
+                directories.append((Path(local_dir) / entry.name).absolute())
 
         # make page act as parent node in Confluence
         parent_id: Optional[ConfluenceQualifiedID] = None
@@ -141,21 +144,11 @@ class Application:
         else:
             if parent_id is None:
                 raise ValueError(
-                    "expected: Confluence page ID to act as parent for Markdown files with no linked Confluence page"
+                    f"expected: parent page ID for Markdown file with no linked Confluence page: {absolute_path}"
                 )
 
-            # use file name without extension if no title is supplied
-            if title is None:
-                title = absolute_path.stem
-
-            confluence_page = self.api.get_or_create_page(
-                title, parent_id.page_id, space_key=parent_id.space_key
-            )
-            self._update_markdown(
-                absolute_path,
-                document,
-                confluence_page.id,
-                confluence_page.space_key,
+            confluence_page = self._create_page(
+                absolute_path, document, title, parent_id
             )
 
         return ConfluencePageMetadata(
@@ -166,7 +159,32 @@ class Application:
             title=confluence_page.title or "",
         )
 
+    def _create_page(
+        self,
+        absolute_path: Path,
+        document: str,
+        title: Optional[str],
+        parent_id: ConfluenceQualifiedID,
+    ) -> ConfluencePage:
+        "Creates a new Confluence page when Markdown file doesn't have an embedded page ID yet."
+
+        # use file name without extension if no title is supplied
+        if title is None:
+            title = absolute_path.stem
+
+        confluence_page = self.api.get_or_create_page(
+            title, parent_id.page_id, space_key=parent_id.space_key
+        )
+        self._update_markdown(
+            absolute_path,
+            document,
+            confluence_page.id,
+            confluence_page.space_key,
+        )
+        return confluence_page
+
     def _update_document(self, document: ConfluenceDocument, base_path: Path) -> None:
+        "Saves a new version of a Confluence document."
 
         for image in document.images:
             self.api.upload_attachment(
