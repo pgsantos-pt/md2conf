@@ -7,6 +7,7 @@ import os.path
 import re
 import sys
 import uuid
+import urllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
@@ -310,7 +311,7 @@ class ConfluenceStorageFormatConverter(NodeVisitor):
         heading.text = None
 
     def _transform_link(self, anchor: ET._Element) -> None:
-        url = anchor.attrib["href"]
+        url = urllib.parse.unquote(anchor.attrib["href"])
         if is_absolute_url(url):
             return
 
